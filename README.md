@@ -9,6 +9,8 @@ A simple perl script to download exercise data from https://connect.garmin.com
 * You will be prompted for your garmin connect password
 * Exercise data will appear in: `$backup_location`/yyyy/mm/ folders
 
+Tested on both windows and linux
+
 ## Motivation
 
 This script downloads raw .json and .gpx files to your local computer.  These can then be included in your normal backups, so that you are never in danger of losing access to your garmin data.

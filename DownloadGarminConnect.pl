@@ -31,6 +31,10 @@ my $url_gc_gpx_activity    = 'https://connect.garmin.com/modern/proxy/download-s
 my $url_gc_activity        = 'https://connect.garmin.com/modern/proxy/activity-service-1.3/json/activity/%d';
 my $url_gc_activityDetails = 'https://connect.garmin.com/modern/proxy/activity-service-1.3/json/activityDetails/%d';
 
+if ( !-d $backup_location ) {
+    croak "$backup_location does not exist\n";
+}
+
 ReadMode( 'noecho' );
 print "Enter Password: ";
 chomp( $garmin_password = <STDIN> );
