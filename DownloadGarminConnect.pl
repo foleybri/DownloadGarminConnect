@@ -28,8 +28,9 @@ my $url_gc_login =
 my $url_gc_post_auth       = 'https://connect.garmin.com/post-auth/login?';
 my $url_gc_search          = 'https://connect.garmin.com/proxy/activity-search-service-1.2/json/activities?';
 my $url_gc_gpx_activity    = 'https://connect.garmin.com/modern/proxy/download-service/export/gpx/activity/%d';
-my $url_gc_activity        = 'https://connect.garmin.com/modern/proxy/activity-service-1.3/json/activity/%d';
-my $url_gc_activityDetails = 'https://connect.garmin.com/modern/proxy/activity-service-1.3/json/activityDetails/%d';
+my $url_gc_activity        = 'https://connect.garmin.com/modern/proxy/activity-service/activity/%d';
+my $url_gc_activityDetails = 'https://connect.garmin.com/modern/proxy/activity-service/activity/%d/details';
+my $url_gc_activitySplits  = 'https://connect.garmin.com/modern/proxy/activity-service/activity/%d/splits';
 
 if ( !-d $backup_location ) {
     croak "$backup_location does not exist\n";
@@ -61,7 +62,7 @@ sub makeHttpRequest {
         return $response->content;
     }
     elsif ( $skipFailure ) {
-        print 'Error while ' . $action . '. ' . $response->status_line . '. ' . $response->content . "\n";
+        print 'Error while ' . $action . '. ' . $response->status_line . "\n";
         return '';
     }
     else {
@@ -134,6 +135,7 @@ while ( $downloaded < $total ) {
 
         my $json_file    = sprintf( '%s/%d.json',         $path, $id );
         my $details_file = sprintf( '%s/%d-details.json', $path, $id );
+        my $splits_file  = sprintf( '%s/%d-splits.json',  $path, $id );
         my $gpx_file = sprintf '%s/%d.gpx', $path, $id;
 
         if ( !-f $json_file ) {
@@ -157,6 +159,18 @@ while ( $downloaded < $total ) {
                 open my $fh, ">", $details_file or croak 'Could not open ' . $details_file . "\n";
                 print $fh $json->pretty->encode( $activity_details );
                 close $fh or croak 'Could not close ' . $details_file . "\n";
+            }
+        }
+
+        if ( !-f $splits_file ) {
+            my $activity_splits_url = sprintf $url_gc_activitySplits, $id;
+            $response = makeHttpRequest( $ua, $activity_splits_url, 'Downloading: ' . $activity_splits_url . ' => ' . $splits_file, 1 );
+            if ( length $response ) {
+                my $activity_splits = $json->decode( $response );
+
+                open my $fh, ">", $splits_file or croak 'Could not open ' . $splits_file . "\n";
+                print $fh $json->pretty->encode( $activity_splits );
+                close $fh or croak 'Could not close ' . $splits_file . "\n";
             }
         }
 
