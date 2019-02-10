@@ -25,8 +25,8 @@ my $garmin_password = '';                      # Prompted for below
 my $batch_size      = 25;
 my $url_gc_login =
 'https://sso.garmin.com/sso/login?service=https%3A%2F%2Fconnect.garmin.com%2Fpost-auth%2Flogin&webhost=olaxpw-connect04&source=https%3A%2F%2Fconnect.garmin.com%2Fen-US%2Fsignin&redirectAfterAccountLoginUrl=https%3A%2F%2Fconnect.garmin.com%2Fpost-auth%2Flogin&redirectAfterAccountCreationUrl=https%3A%2F%2Fconnect.garmin.com%2Fpost-auth%2Flogin&gauthHost=https%3A%2F%2Fsso.garmin.com%2Fsso&locale=en_US&id=gauth-widget&cssUrl=https%3A%2F%2Fstatic.garmincdn.com%2Fcom.garmin.connect%2Fui%2Fcss%2Fgauth-custom-v1.1-min.css&clientId=GarminConnect&rememberMeShown=true&rememberMeChecked=false&createAccountShown=true&openCreateAccount=false&usernameShown=false&displayNameShown=false&consumeServiceTicket=false&initialFocus=true&embedWidget=false&generateExtraServiceTicket=false';
-my $url_gc_post_auth       = 'https://connect.garmin.com/post-auth/login?';
-my $url_gc_search          = 'https://connect.garmin.com/proxy/activity-search-service-1.2/json/activities?';
+my $url_gc_post_auth = 'https://connect.garmin.com/modern/?';
+my $url_gc_search          = 'https://connect.garmin.com/modern/proxy/activitylist-service/activities/search/activities?';
 my $url_gc_gpx_activity    = 'https://connect.garmin.com/modern/proxy/download-service/export/gpx/activity/%d';
 my $url_gc_activity        = 'https://connect.garmin.com/modern/proxy/activity-service/activity/%d';
 my $url_gc_activityDetails = 'https://connect.garmin.com/modern/proxy/activity-service/activity/%d/details';
@@ -102,32 +102,20 @@ if ( $login_response =~ /.*(ST-[^-]+-[^-]+-cas).*/ ) {
 
 makeHttpRequest( $ua, $url_gc_post_auth . 'ticket=' . $service_ticket, 'Posting login ticket to garmin', 0 );
 
-my $response = makeHttpRequest( $ua, $url_gc_search . 'start=0&limit=1', 'Searching for activity count', 0 );
-my $results  = $json->decode( $response );
-my $total    = $results->{ results }->{ totalFound };
-printf( "Found %d activities\n", $total );
+my $downloaded = 0;
+while ( 1 ) {
+    my $response = makeHttpRequest( $ua, $url_gc_search . 'start=' . $downloaded . '&limit=' . $batch_size, 'Search for activity batch', 0 );
+    my $results = $json->decode( $response );
 
-my $downloaded      = 0;
-my $num_to_download = 0;
-
-while ( $downloaded < $total ) {
-    if ( $total - $downloaded > $batch_size ) {
-        $num_to_download = $batch_size;
-    }
-    else {
-        $num_to_download = $total - $downloaded;
+    if ( scalar @$results <= 0 ) {
+        last;
     }
 
-    $response = makeHttpRequest( $ua, $url_gc_search . 'start=' . $downloaded . '&limit=' . $num_to_download, 'Search for activity batch', 0 );
-    $results = $json->decode( $response );
-
-    my $activities = $results->{ results }->{ activities };
-    foreach my $activity ( @$activities ) {
-        my $a  = $activity->{ activity };
+    foreach my $a ( @$results ) {
         my $id = $a->{ activityId };
-        printf( "%d/%d %s id: %s, name: %s, type: %s\n", $downloaded + 1, $total, $a->{ activitySummary }->{ BeginTimestamp }->{ display }, $id, $a->{ activityName }, $a->{ activityType }->{ display } );
+        printf( "%d %s id: %s, name: %s, type: %s\n", $downloaded + 1, $a->{ startTimeLocal }, $id, $a->{ activityName }, $a->{ activityType }->{ typeKey } );
 
-        my $date = $a->{ activitySummary }->{ BeginTimestamp }->{ value };
+        my $date = $a->{ startTimeLocal };
         my ( $year, $month, $day ) = split( /-/x, $date );
         my $path = sprintf '%s/%d/%02d', $backup_location, $year, $month;
         make_path( $path );
@@ -137,8 +125,10 @@ while ( $downloaded < $total ) {
         my $details_file = sprintf( '%s/%d-details.json', $path, $id );
         my $splits_file  = sprintf( '%s/%d-splits.json',  $path, $id );
         my $gpx_file = sprintf '%s/%d.gpx', $path, $id;
+        my $requires_gpx_download = 0;
 
         if ( !-f $json_file ) {
+            $requires_gpx_download = 1;
             my $activity_url = sprintf $url_gc_activity, $id;
             $response = makeHttpRequest( $ua, $activity_url, 'Downloading: ' . $activity_url . ' => ' . $json_file, 1 );
             if ( length $response ) {
@@ -151,6 +141,7 @@ while ( $downloaded < $total ) {
         }
 
         if ( !-f $details_file ) {
+            $requires_gpx_download = 1;
             my $activity_details_url = sprintf $url_gc_activityDetails, $id;
             $response = makeHttpRequest( $ua, $activity_details_url, 'Downloading: ' . $activity_details_url . ' => ' . $details_file, 1 );
             if ( length $response ) {
@@ -163,6 +154,7 @@ while ( $downloaded < $total ) {
         }
 
         if ( !-f $splits_file ) {
+            $requires_gpx_download = 1;
             my $activity_splits_url = sprintf $url_gc_activitySplits, $id;
             $response = makeHttpRequest( $ua, $activity_splits_url, 'Downloading: ' . $activity_splits_url . ' => ' . $splits_file, 1 );
             if ( length $response ) {
@@ -174,7 +166,7 @@ while ( $downloaded < $total ) {
             }
         }
 
-        if ( !-f $gpx_file ) {
+        if ( $requires_gpx_download && !-f $gpx_file ) {
             my $activity_gpx_url = sprintf $url_gc_gpx_activity, $id;
             $response = makeHttpRequest( $ua, $activity_gpx_url, 'Downloading: ' . $activity_gpx_url . ' => ' . $gpx_file, 1 );
 
