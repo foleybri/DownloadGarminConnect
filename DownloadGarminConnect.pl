@@ -10,6 +10,8 @@ use File::Path qw(make_path);
 use String::ShellQuote;
 use Term::ReadKey;
 
+# use LWP::ConsoleLogger::Everywhere ();
+
 #
 # This script downloads raw .json and .gpx files from https://connect.garmin.com to your local computer
 # Downloads are incremental, so only new exercises since your last backup will be downloaded
@@ -17,20 +19,61 @@ use Term::ReadKey;
 # API Documentation from Garmin:
 # * https://connect.garmin.com/proxy/activity-search-service-1.2/
 # * https://connect.garmin.com/proxy/activity-service-1.3/
-#
+
+my %login_params = (
+    service                         => 'https://connect.garmin.com/modern/',
+    webhost                         => 'https://connect.garmin.com/modern/',
+    source                          => 'https://connect.garmin.com/signin/',
+    redirectAfterAccountLoginUrl    => 'https://connect.garmin.com/modern/',
+    redirectAfterAccountCreationUrl => 'https://connect.garmin.com/modern/',
+    gauthHost                       => 'https://sso.garmin.com/sso',
+    locale                          => 'en_GB',
+    id                              => 'gauth-widget',
+    cssUrl                          => 'https://connect.garmin.com/gauth-custom-v1.2-min.css',
+    privacyStatementUrl             => 'https://www.garmin.com/en-GB/privacy/connect/',
+    clientId                        => 'GarminConnect',
+    rememberMeShown                 => 'true',
+    rememberMeChecked               => 'false',
+    createAccountShown              => 'true',
+    openCreateAccount               => 'false',
+    displayNameShown                => 'false',
+    consumeServiceTicket            => 'false',
+    initialFocus                    => 'true',
+    embedWidget                     => 'false',
+    socialEnabled                   => 'false',
+    generateExtraServiceTicket      => 'true',
+    generateTwoExtraServiceTickets  => 'true',
+    generateNoServiceTicket         => 'false',
+    globalOptInShown                => 'true',
+    globalOptInChecked              => 'false',
+    mobile                          => 'false',
+    connectLegalTerms               => 'true',
+    showTermsOfUse                  => 'false',
+    showPrivacyPolicy               => 'false',
+    showConnectLegalAge             => 'false',
+    locationPromptShown             => 'true',
+    showPassword                    => 'true',
+    useCustomHeader                 => 'false',
+    mfaRequired                     => 'false',
+    performMFACheck                 => 'false',
+    rememberMyBrowserShown          => 'true',
+    rememberMyBrowserChecked        => 'false'
+);
+
+my $signin_page = 'https://connect.garmin.com/signin/';
+my $sso_page    = 'https://sso.garmin.com/sso/signin';
+my $modern_page = 'https://connect.garmin.com/modern/';
 
 my $backup_location = '/data/Brian/Garmin';    # Activities will be stored in yyyy/mm directory structure beneath this location
 my $garmin_username = 'brianf@sindar.net';
 my $garmin_password = '';                      # Prompted for below
 my $batch_size      = 25;
-my $url_gc_login =
-'https://sso.garmin.com/sso/login?service=https%3A%2F%2Fconnect.garmin.com%2Fpost-auth%2Flogin&webhost=olaxpw-connect04&source=https%3A%2F%2Fconnect.garmin.com%2Fen-US%2Fsignin&redirectAfterAccountLoginUrl=https%3A%2F%2Fconnect.garmin.com%2Fpost-auth%2Flogin&redirectAfterAccountCreationUrl=https%3A%2F%2Fconnect.garmin.com%2Fpost-auth%2Flogin&gauthHost=https%3A%2F%2Fsso.garmin.com%2Fsso&locale=en_US&id=gauth-widget&cssUrl=https%3A%2F%2Fstatic.garmincdn.com%2Fcom.garmin.connect%2Fui%2Fcss%2Fgauth-custom-v1.1-min.css&clientId=GarminConnect&rememberMeShown=true&rememberMeChecked=false&createAccountShown=true&openCreateAccount=false&usernameShown=false&displayNameShown=false&consumeServiceTicket=false&initialFocus=true&embedWidget=false&generateExtraServiceTicket=false';
-my $url_gc_post_auth = 'https://connect.garmin.com/modern/?';
-my $url_gc_search          = 'https://connect.garmin.com/modern/proxy/activitylist-service/activities/search/activities?';
-my $url_gc_gpx_activity    = 'https://connect.garmin.com/modern/proxy/download-service/export/gpx/activity/%d';
-my $url_gc_activity        = 'https://connect.garmin.com/modern/proxy/activity-service/activity/%d';
-my $url_gc_activityDetails = 'https://connect.garmin.com/modern/proxy/activity-service/activity/%d/details';
-my $url_gc_activitySplits  = 'https://connect.garmin.com/modern/proxy/activity-service/activity/%d/splits';
+
+my $url_gc_search          = 'https://connect.garmin.com/proxy/activitylist-service/activities/search/activities?';
+my $url_gc_gpx_activity    = 'https://connect.garmin.com/proxy/download-service/export/gpx/activity/%d';
+my $url_gc_activity        = 'https://connect.garmin.com/proxy/activity-service/activity/%d';
+my $url_gc_activityDetails = 'https://connect.garmin.com/proxy/activity-service/activity/%d/details';
+my $url_gc_activitySplits  = 'https://connect.garmin.com/proxy/activity-service/activity/%d/splits';
 
 if ( !-d $backup_location ) {
     croak "$backup_location does not exist\n";
@@ -42,13 +85,17 @@ chomp( $garmin_password = <STDIN> );
 ReadMode( 'restore' );
 
 sub makeHttpRequest {
-    my ( $ua, $url, $action, $skipFailure, $postParams ) = @_;
+    my ( $ua, $url, $action, $skipFailure, $postParams, $getParams ) = @_;
 
     print( $action . "...\n" );
+    print( $url . "\n" );
     sleep( 1 );    # Throttle requests so as not to overload garmin
     my $response;
     if ( defined $postParams ) {
         $response = $ua->post( $url, $postParams );
+    }
+    elsif ( defined $getParams ) {
+        $response = $ua->get( $url, $getParams, Referer => $signin_page );
     }
     else {
         $response = $ua->get( $url );
@@ -79,33 +126,39 @@ my $ua = LWP::UserAgent->new(
 );
 my $json = JSON->new();
 
-makeHttpRequest( $ua, $url_gc_login, 'Hitting login page for the first time', 0 );
-my $login_response = makeHttpRequest(
-    $ua,
-    $url_gc_login,
-    'Entering username and password on login page',
-    0,
-    {
-        username            => $garmin_username,
-        password            => $garmin_password,
-        embed               => "true",
-        lt                  => 'e1s1',
-        _eventId            => "submit",
-        displayNameRequired => 'false',
-    }
-);
+my $full_url = URI->new( $sso_page );
+$full_url->query_form( %login_params );
 
-my $service_ticket = '';
-if ( $login_response =~ /.*(ST-[^-]+-[^-]+-cas).*/ ) {
-    $service_ticket = $1;
+my $resp = $ua->get( $full_url, Referer => $signin_page );
+
+my $csrf = '';
+if ( $resp->content =~ /.*name="_csrf" value="([^"]*)".*/ ) {
+    $csrf = $1;
+    print 'CSRF: ' . $csrf . "\n";
+}
+else {
+    croak 'Could not find csrf';
 }
 
-makeHttpRequest( $ua, $url_gc_post_auth . 'ticket=' . $service_ticket, 'Posting login ticket to garmin', 0 );
+my $resp2 = $ua->post( $full_url, Referer => $full_url, 'Content-Type' => 'application/x-www-form-urlencoded', Content => { username => $garmin_username, password => $garmin_password, embed => 'false', _csrf => $csrf } );
+
+my $service_ticket = '';
+if ( $resp2->content =~ /.*(ST-[^-]+-[^-]+-cas).*/ ) {
+    $service_ticket = $1;
+    print 'Service Ticket: ' . $service_ticket . "\n";
+}
+else {
+    croak 'Could not find service ticket';
+}
+
+my $m = URI->new( $modern_page );
+$m->query_form( ticket => $service_ticket );
+my $resp3 = $ua->get( $m, Referer => $full_url );
 
 my $downloaded = 0;
 while ( 1 ) {
     my $response = makeHttpRequest( $ua, $url_gc_search . 'start=' . $downloaded . '&limit=' . $batch_size, 'Search for activity batch', 0 );
-    my $results = $json->decode( $response );
+    my $results  = $json->decode( $response );
 
     if ( scalar @$results <= 0 ) {
         last;
@@ -124,7 +177,7 @@ while ( 1 ) {
         my $json_file    = sprintf( '%s/%d.json',         $path, $id );
         my $details_file = sprintf( '%s/%d-details.json', $path, $id );
         my $splits_file  = sprintf( '%s/%d-splits.json',  $path, $id );
-        my $gpx_file = sprintf '%s/%d.gpx', $path, $id;
+        my $gpx_file              = sprintf '%s/%d.gpx', $path, $id;
         my $requires_gpx_download = 0;
 
         if ( !-f $json_file ) {
